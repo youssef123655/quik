@@ -1,3 +1,16 @@
+// ===== FIREBASE CONFIGURATION =====
+const firebaseConfig = {
+    apiKey: "AIzaSyDf9ww6nAKQjHE_rjWObQzBadcfok7EqZc",
+    authDomain: "quik-b2881.firebaseapp.com",
+    projectId: "quik-b2881",
+    storageBucket: "quik-b2881.firebasestorage.app",
+    messagingSenderId: "742780736000",
+    appId: "1:742780736000:web:0b0067a760d1d7f3cabee5",
+    measurementId: "G-JY2KP1Q360"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
 (function () {
   const CELL = 4;
   const FREE_MS = 14 * 24 * 60 * 60 * 1000;
