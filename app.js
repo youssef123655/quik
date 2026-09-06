@@ -29,7 +29,7 @@ const db = firebase.database();
   let GRID = 200;
   let price = 0;
   let launchTs = Date.now();
-  let cellsMap = {};   // "x,y" -> {color,label}
+  let cellsMap = {};
   let takenSet = new Set();
   let feedCache = [];
 
@@ -38,7 +38,6 @@ const db = firebase.database();
   let zoomIdx = 1;
   const zoomLevels = [0.5, 1, 1.6, 2.2];
 
-  // Build color swatches
   const swatchWrap = document.getElementById('color-swatches');
   swatchColors.forEach((c, i) => {
     const b = document.createElement('button');
@@ -61,6 +60,11 @@ const db = firebase.database();
 
   function key(x, y) { return x + ',' + y; }
   function isTaken(x, y) { return takenSet.has(key(x, y)); }
+
+  function freeDaysLeft() {
+    const left = FREE_MS - (Date.now() - launchTs);
+    return Math.max(0, Math.ceil(left / (24 * 60 * 60 * 1000)));
+  }
 
   function resizeCanvas() {
     canvas.width = GRID * CELL;
@@ -179,7 +183,7 @@ const db = firebase.database();
     document.getElementById('stat-open').textContent = (total - claimed).toLocaleString();
     document.getElementById('stat-price').textContent =
       price === 0 ? ('Free (' + freeDaysLeft() + 'd left)') : '$1 / square';
-    
+
     let raised = 0;
     feedCache.forEach((f) => { if (!f.is_system) raised += (f.price || 0) * f.count; });
     document.getElementById('stat-raised').textContent = '$' + raised.toLocaleString();
@@ -238,11 +242,6 @@ const db = firebase.database();
     el.className = 'flash show' + (isError ? ' error' : '');
   }
 
-  function freeDaysLeft() {
-    const left = FREE_MS - (Date.now() - launchTs);
-    return Math.max(0, Math.ceil(left / (24 * 60 * 60 * 1000)));
-  }
-
   // ===== LOAD STATE FROM FIREBASE =====
   function loadStateFromFirebase() {
     db.ref('state/launchTs').once('value', (snap) => {
@@ -250,13 +249,13 @@ const db = firebase.database();
         launchTs = snap.val();
       }
     });
-    
+
     db.ref('pixels').once('value', (snapshot) => {
       const data = snapshot.val();
       cellsMap = {};
       takenSet = new Set();
       feedCache = [];
-      
+
       if (data) {
         for (let index in data) {
           const [x, y] = index.split(',').map(Number);
@@ -264,8 +263,7 @@ const db = firebase.database();
           const k = key(x, y);
           cellsMap[k] = { color: pixelData.color, label: pixelData.label || '' };
           takenSet.add(k);
-          
-          // Add to feed cache
+
           feedCache.push({
             x0: x,
             y0: y,
@@ -277,7 +275,7 @@ const db = firebase.database();
           });
         }
       }
-      
+
       draw();
       renderStats();
       renderFeed();
@@ -290,11 +288,10 @@ const db = firebase.database();
     const [x, y] = index.split(',').map(Number);
     const data = snapshot.val();
     const k = key(x, y);
-    
+
     cellsMap[k] = { color: data.color, label: data.label || '' };
     takenSet.add(k);
-    
-    // Update feed
+
     feedCache.push({
       x0: x,
       y0: y,
@@ -304,7 +301,7 @@ const db = firebase.database();
       price: price,
       ts: data.timestamp || Date.now()
     });
-    
+
     draw();
     renderStats();
     renderFeed();
@@ -314,7 +311,7 @@ const db = firebase.database();
   async function claimPixels(cells, color, label) {
     const updates = {};
     const timestamp = Date.now();
-    
+
     cells.forEach((cell) => {
       const k = key(cell.x, cell.y);
       updates['pixels/' + k] = {
@@ -323,12 +320,11 @@ const db = firebase.database();
         timestamp: timestamp
       };
     });
-    
-    // Also update launch timestamp if not set
+
     if (!launchTs) {
       updates['state/launchTs'] = timestamp;
     }
-    
+
     await db.ref().update(updates);
     return true;
   }
@@ -340,7 +336,7 @@ const db = firebase.database();
     updateSelectionUI();
     draw();
   });
-  
+
   canvas.addEventListener('mousemove', (e) => {
     const c = cellFromEvent(e);
     document.getElementById('hover-coord').textContent = '(' + c.x + ', ' + c.y + ')';
@@ -352,7 +348,7 @@ const db = firebase.database();
       draw();
     }
   });
-  
+
   window.addEventListener('mouseup', () => { selecting = false; });
   canvas.addEventListener('mouseleave', () => {
     document.getElementById('hover-coord').textContent = '';
@@ -372,21 +368,17 @@ const db = firebase.database();
     btn.textContent = 'Processing…';
 
     try {
-      // Save to Firebase
       await claimPixels(cells, chosenColor, label);
-      
-      // Clear selection
+
       startCell = endCell = null;
-      
-      // Show success
+
       showFlash('✅ Your squares have been claimed!', false);
-      
-      // Update UI
+
       updateSelectionUI();
       draw();
       renderStats();
       renderFeed();
-      
+
     } catch (err) {
       showFlash('❌ Something went wrong. Please try again.', true);
       btn.disabled = false;
