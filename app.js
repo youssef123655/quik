@@ -11,10 +11,11 @@ const firebaseConfig = {
 
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
+
 (function () {
   const CELL = 4;
   const FREE_MS = 14 * 24 * 60 * 60 * 1000;
-  const POLL_MS = 4000;
+  const POLL_MS = 2000;
 
   const canvas = document.getElementById('grid');
   const ctx = canvas.getContext('2d');
@@ -28,8 +29,8 @@ const db = firebase.database();
   let GRID = 200;
   let price = 0;
   let launchTs = Date.now();
-  let cellsMap = {};   // "x,y" -> {color,label}   (confirmed, owned squares only)
-  let takenSet = new Set(); // owned + reserved, used to block selection
+  let cellsMap = {};   // "x,y" -> {color,label}
+  let takenSet = new Set();
   let feedCache = [];
 
   let selecting = false;
@@ -37,6 +38,7 @@ const db = firebase.database();
   let zoomIdx = 1;
   const zoomLevels = [0.5, 1, 1.6, 2.2];
 
+  // Build color swatches
   const swatchWrap = document.getElementById('color-swatches');
   swatchColors.forEach((c, i) => {
     const b = document.createElement('button');
@@ -59,11 +61,6 @@ const db = firebase.database();
 
   function key(x, y) { return x + ',' + y; }
   function isTaken(x, y) { return takenSet.has(key(x, y)); }
-
-  function freeDaysLeft() {
-    const left = FREE_MS - (Date.now() - launchTs);
-    return Math.max(0, Math.ceil(left / (24 * 60 * 60 * 1000)));
-  }
 
   function resizeCanvas() {
     canvas.width = GRID * CELL;
@@ -182,7 +179,7 @@ const db = firebase.database();
     document.getElementById('stat-open').textContent = (total - claimed).toLocaleString();
     document.getElementById('stat-price').textContent =
       price === 0 ? ('Free (' + freeDaysLeft() + 'd left)') : '$1 / square';
-
+    
     let raised = 0;
     feedCache.forEach((f) => { if (!f.is_system) raised += (f.price || 0) * f.count; });
     document.getElementById('stat-raised').textContent = '$' + raised.toLocaleString();
@@ -241,40 +238,109 @@ const db = firebase.database();
     el.className = 'flash show' + (isError ? ' error' : '');
   }
 
-  async function fetchState() {
-    try {
-      const res = await fetch('/api/state');
-      const data = await res.json();
-      const gridChanged = data.gridSize !== GRID;
-      GRID = data.gridSize;
-      price = data.price;
-      launchTs = data.launchTs;
-      feedCache = data.feed || [];
+  function freeDaysLeft() {
+    const left = FREE_MS - (Date.now() - launchTs);
+    return Math.max(0, Math.ceil(left / (24 * 60 * 60 * 1000)));
+  }
 
+  // ===== LOAD STATE FROM FIREBASE =====
+  function loadStateFromFirebase() {
+    db.ref('state/launchTs').once('value', (snap) => {
+      if (snap.exists()) {
+        launchTs = snap.val();
+      }
+    });
+    
+    db.ref('pixels').once('value', (snapshot) => {
+      const data = snapshot.val();
       cellsMap = {};
       takenSet = new Set();
-      data.squares.forEach((s) => {
-        const k = key(s.x, s.y);
-        cellsMap[k] = { color: s.color, label: s.label };
-        takenSet.add(k);
-      });
-      data.reserved.forEach((r) => takenSet.add(key(r.x, r.y)));
-
-      if (gridChanged) resizeCanvas();
+      feedCache = [];
+      
+      if (data) {
+        for (let index in data) {
+          const [x, y] = index.split(',').map(Number);
+          const pixelData = data[index];
+          const k = key(x, y);
+          cellsMap[k] = { color: pixelData.color, label: pixelData.label || '' };
+          takenSet.add(k);
+          
+          // Add to feed cache
+          feedCache.push({
+            x0: x,
+            y0: y,
+            count: 1,
+            color: pixelData.color,
+            label: pixelData.label || '',
+            price: price,
+            ts: pixelData.timestamp || Date.now()
+          });
+        }
+      }
+      
       draw();
       renderStats();
       renderFeed();
-    } catch (err) {
-      console.error('Could not load the current board:', err);
-    }
+    });
   }
 
+  // ===== LIVE UPDATES FROM FIREBASE =====
+  db.ref('pixels').on('child_added', (snapshot) => {
+    const index = snapshot.key;
+    const [x, y] = index.split(',').map(Number);
+    const data = snapshot.val();
+    const k = key(x, y);
+    
+    cellsMap[k] = { color: data.color, label: data.label || '' };
+    takenSet.add(k);
+    
+    // Update feed
+    feedCache.push({
+      x0: x,
+      y0: y,
+      count: 1,
+      color: data.color,
+      label: data.label || '',
+      price: price,
+      ts: data.timestamp || Date.now()
+    });
+    
+    draw();
+    renderStats();
+    renderFeed();
+  });
+
+  // ===== CLAIM PIXELS (Save to Firebase) =====
+  async function claimPixels(cells, color, label) {
+    const updates = {};
+    const timestamp = Date.now();
+    
+    cells.forEach((cell) => {
+      const k = key(cell.x, cell.y);
+      updates['pixels/' + k] = {
+        color: color,
+        label: label,
+        timestamp: timestamp
+      };
+    });
+    
+    // Also update launch timestamp if not set
+    if (!launchTs) {
+      updates['state/launchTs'] = timestamp;
+    }
+    
+    await db.ref().update(updates);
+    return true;
+  }
+
+  // ===== EVENT HANDLERS =====
   canvas.addEventListener('mousedown', (e) => {
     selecting = true;
     startCell = endCell = cellFromEvent(e);
     updateSelectionUI();
     draw();
   });
+  
   canvas.addEventListener('mousemove', (e) => {
     const c = cellFromEvent(e);
     document.getElementById('hover-coord').textContent = '(' + c.x + ', ' + c.y + ')';
@@ -286,11 +352,13 @@ const db = firebase.database();
       draw();
     }
   });
+  
   window.addEventListener('mouseup', () => { selecting = false; });
   canvas.addEventListener('mouseleave', () => {
     document.getElementById('hover-coord').textContent = '';
   });
 
+  // ===== BUY BUTTON =====
   document.getElementById('buy-btn').addEventListener('click', async () => {
     if (!startCell || !endCell) return;
     const { x0, y0, x1, y1 } = rectFrom(startCell, endCell);
@@ -304,51 +372,29 @@ const db = firebase.database();
     btn.textContent = 'Processing…';
 
     try {
-      const res = await fetch('/api/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cells, color: chosenColor, label }),
-      });
-      const data = await res.json();
-
-      if (data.error) {
-        showFlash(data.error, true);
-        startCell = endCell = null;
-        await fetchState();
-        updateSelectionUI();
-        return;
-      }
-      if (data.free) {
-        startCell = endCell = null;
-        await fetchState();
-        updateSelectionUI();
-        return;
-      }
-      if (data.url) {
-        window.location.href = data.url; // off to Stripe's hosted checkout page
-        return;
-      }
+      // Save to Firebase
+      await claimPixels(cells, chosenColor, label);
+      
+      // Clear selection
+      startCell = endCell = null;
+      
+      // Show success
+      showFlash('✅ Your squares have been claimed!', false);
+      
+      // Update UI
+      updateSelectionUI();
+      draw();
+      renderStats();
+      renderFeed();
+      
     } catch (err) {
-      showFlash('Something went wrong starting checkout. Please try again.', true);
+      showFlash('❌ Something went wrong. Please try again.', true);
       btn.disabled = false;
       btn.textContent = originalText;
     }
   });
 
-  function handleReturnParams() {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('success')) {
-      showFlash('Payment received — your squares will appear within a few seconds.', false);
-    } else if (params.get('canceled')) {
-      showFlash('Checkout canceled — those squares are still available.', false);
-    }
-    if (params.get('success') || params.get('canceled')) {
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-  }
-
-  handleReturnParams();
+  // ===== INIT =====
   resizeCanvas();
-  fetchState();
-  setInterval(fetchState, POLL_MS);
+  loadStateFromFirebase();
 })();
