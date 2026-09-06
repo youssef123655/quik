@@ -242,7 +242,6 @@ const db = firebase.database();
     el.className = 'flash show' + (isError ? ' error' : '');
   }
 
-  // ===== LOAD STATE FROM FIREBASE =====
   function loadStateFromFirebase() {
     db.ref('state/launchTs').once('value', (snap) => {
       if (snap.exists()) {
@@ -282,7 +281,6 @@ const db = firebase.database();
     });
   }
 
-  // ===== LIVE UPDATES FROM FIREBASE =====
   db.ref('pixels').on('child_added', (snapshot) => {
     const index = snapshot.key;
     const [x, y] = index.split(',').map(Number);
@@ -307,7 +305,6 @@ const db = firebase.database();
     renderFeed();
   });
 
-  // ===== CLAIM PIXELS (Save to Firebase) =====
   async function claimPixels(cells, color, label) {
     const updates = {};
     const timestamp = Date.now();
@@ -329,7 +326,6 @@ const db = firebase.database();
     return true;
   }
 
-  // ===== EVENT HANDLERS =====
   canvas.addEventListener('mousedown', (e) => {
     selecting = true;
     startCell = endCell = cellFromEvent(e);
@@ -354,7 +350,6 @@ const db = firebase.database();
     document.getElementById('hover-coord').textContent = '';
   });
 
-  // ===== BUY BUTTON =====
   document.getElementById('buy-btn').addEventListener('click', async () => {
     if (!startCell || !endCell) return;
     const { x0, y0, x1, y1 } = rectFrom(startCell, endCell);
@@ -386,7 +381,6 @@ const db = firebase.database();
     }
   });
 
-  // ===== INIT =====
   resizeCanvas();
   loadStateFromFirebase();
 })();
