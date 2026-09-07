@@ -28,7 +28,7 @@ const db = firebase.database();
 
   let GRID = 200;
   let price = 0;
-  let launchTs = Date.now();
+  let launchTs = null; // Will be loaded from Firebase
   let cellsMap = {};   // "x,y" -> {color,label}   (confirmed, owned squares only)
   let takenSet = new Set(); // owned + reserved, used to block selection
   let feedCache = [];
@@ -62,6 +62,7 @@ const db = firebase.database();
   function isTaken(x, y) { return takenSet.has(key(x, y)); }
 
   function freeDaysLeft() {
+    if (!launchTs) return 14; // Default to 14 days if launchTs not set yet
     const left = FREE_MS - (Date.now() - launchTs);
     return Math.max(0, Math.ceil(left / (24 * 60 * 60 * 1000)));
   }
@@ -240,14 +241,23 @@ const db = firebase.database();
     const el = document.getElementById('flash');
     el.textContent = message;
     el.className = 'flash show' + (isError ? ' error' : '');
+    console.log('[Quik]', message);
   }
 
   // ===== LOAD STATE FROM FIREBASE =====
   function loadStateFromFirebase() {
+    console.log('[Quik] Loading state from Firebase...');
+    
     db.ref('state/launchTs').once('value', (snap) => {
       if (snap.exists()) {
         launchTs = snap.val();
+        console.log('[Quik] Loaded launchTs:', new Date(launchTs));
+      } else {
+        console.log('[Quik] No launchTs found, will be created on first claim');
       }
+    }).catch((err) => {
+      console.error('[Quik] Error loading launchTs:', err);
+      showFlash('⚠️ Could not load launch time from database', true);
     });
 
     db.ref('pixels').once('value', (snapshot) => {
@@ -257,6 +267,7 @@ const db = firebase.database();
       feedCache = [];
 
       if (data) {
+        console.log('[Quik] Loaded', Object.keys(data).length, 'pixels from database');
         for (let index in data) {
           const [x, y] = index.split(',').map(Number);
           const pixelData = data[index];
@@ -274,11 +285,16 @@ const db = firebase.database();
             ts: pixelData.timestamp || Date.now()
           });
         }
+      } else {
+        console.log('[Quik] No pixels found in database yet');
       }
 
       draw();
       renderStats();
       renderFeed();
+    }).catch((err) => {
+      console.error('[Quik] Error loading pixels:', err);
+      showFlash('❌ Could not load pixels from database. Check browser console.', true);
     });
   }
 
@@ -301,9 +317,12 @@ const db = firebase.database();
       ts: data.timestamp || Date.now()
     });
 
+    console.log('[Quik] New pixel claimed at', index);
     draw();
     renderStats();
     renderFeed();
+  }, (err) => {
+    console.error('[Quik] Error listening to pixel updates:', err);
   });
 
   async function claimPixels(cells, color, label) {
@@ -321,10 +340,17 @@ const db = firebase.database();
 
     if (!launchTs) {
       updates['state/launchTs'] = timestamp;
+      console.log('[Quik] First claim - setting launchTs');
     }
 
-    await db.ref().update(updates);
-    return true;
+    try {
+      await db.ref().update(updates);
+      console.log('[Quik] Successfully claimed', cells.length, 'pixel(s)');
+      return true;
+    } catch (err) {
+      console.error('[Quik] Error claiming pixels:', err);
+      throw err;
+    }
   }
 
   canvas.addEventListener('mousedown', (e) => {
@@ -376,7 +402,8 @@ const db = firebase.database();
       renderFeed();
 
     } catch (err) {
-      showFlash('❌ Something went wrong. Please try again.', true);
+      console.error('[Quik] Claim error:', err);
+      showFlash('❌ Something went wrong. Please try again. Check browser console.', true);
       btn.disabled = false;
       btn.textContent = originalText;
     }
