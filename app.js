@@ -15,7 +15,7 @@ const db = firebase.database();
 (function () {
   const CELL = 4;
   const FREE_MS = 14 * 24 * 60 * 60 * 1000;
-  const POLL_MS = 2000;
+  const POLL_MS = 4000;
 
   const canvas = document.getElementById('grid');
   const ctx = canvas.getContext('2d');
@@ -29,8 +29,8 @@ const db = firebase.database();
   let GRID = 200;
   let price = 0;
   let launchTs = Date.now();
-  let cellsMap = {};
-  let takenSet = new Set();
+  let cellsMap = {};   // "x,y" -> {color,label}   (confirmed, owned squares only)
+  let takenSet = new Set(); // owned + reserved, used to block selection
   let feedCache = [];
 
   let selecting = false;
@@ -242,6 +242,7 @@ const db = firebase.database();
     el.className = 'flash show' + (isError ? ' error' : '');
   }
 
+  // ===== LOAD STATE FROM FIREBASE =====
   function loadStateFromFirebase() {
     db.ref('state/launchTs').once('value', (snap) => {
       if (snap.exists()) {
